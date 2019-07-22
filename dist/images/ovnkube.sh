@@ -136,6 +136,29 @@ ovn_db_host=""
 
 # =========================================
 
+setup_ovs_permissions () {
+  if [ ${ovs_user_id:-XX} != "XX" ]; then
+      chown -R ${ovs_user_id} /etc/openvswitch
+      chown -R ${ovs_user_id} /var/run/openvswitch
+      chown -R ${ovs_user_id} /var/log/openvswitch
+  fi
+}
+
+run_as_ovs_user_if_needed () {
+  setup_ovs_permissions
+
+  if [ ${ovs_user_id:-XX} != "XX" ]; then
+      local uid=$(id -u "${ovs_user_id%:*}")
+      local gid=$(id -g "${ovs_user_id%:*}")
+      local groups=$(id -G "${ovs_user_id%:*}" | tr ' ' ',')
+
+      setpriv --reuid $uid --regid $gid --groups $groups $@
+  else
+      $@
+  fi
+}
+
+
 # $1 function to call to test event present, returns 0 (OK) 1 (bad)
 # $2 (optional) arg to $1
 wait_for_event () {
@@ -451,11 +474,10 @@ ovs-server () {
   }
   trap quit SIGTERM
 
+  setup_ovs_permissions
+
   if [ ${ovs_user_id:-XX} != "XX" ]; then
       USER_ARGS="--ovs-user=${ovs_user_id}"
-      chown -R ${ovs_user_id} /etc/openvswitch
-      chown -R ${ovs_user_id} /var/run/openvswitch
-      chown -R ${ovs_user_id} /var/log/openvswitch
   fi
 
   /usr/share/openvswitch/scripts/ovs-ctl start --no-ovs-vswitchd \
@@ -576,20 +598,9 @@ sb-ovsdb () {
 
   echo "=============== run sb_ovsdb ========== MASTER ONLY"
   echo "ovn_log_sb=${ovn_log_sb} ovn_sb_log_file=${ovn_sb_log_file}"
-  USER_ARGS="/usr/share/openvswitch/scripts/ovn-ctl"
 
-  if [ ${ovs_user_id:-XX} != "XX" ]; then
-      local uid=$(id -u "${ovs_user_id%:*}")
-      local gid=$(id -g "${ovs_user_id%:*}")
-      local groups=$(id -G "${ovs_user_id%:*}" | tr ' ' ',')
-
-      USER_ARGS="setpriv --reuid $uid --regid $gid --groups $groups $USER_ARGS"
-      chown -R ${ovs_user_id} /etc/openvswitch
-      chown -R ${ovs_user_id} /var/run/openvswitch
-      chown -R ${ovs_user_id} /var/log/openvswitch
-  fi
-
-  ${USER_ARGS} run_sb_ovsdb --no-monitor     \
+  run_as_ovs_user_if_needed \
+      /usr/share/openvswitch/scripts/ovn-ctl run_sb_ovsdb --no-monitor     \
       --ovn-sb-logfile=${ovn_sb_log_file} --ovn-sb-log="${ovn_log_sb}" &
 
   wait_for_event process_ready ovnsb_db
@@ -631,23 +642,11 @@ run-ovn-northd () {
   # ovnkube-db service
   ovn_nbdb_i=$(echo ${ovn_nbdb} | sed 's;//;;')
   ovn_sbdb_i=$(echo ${ovn_sbdb} | sed 's;//;;')
-  USER_ARGS="/usr/share/openvswitch/scripts/ovn-ctl"
-
-  if [ ${ovs_user_id:-XX} != "XX" ]; then
-      local uid=$(id -u "${ovs_user_id%:*}")
-      local gid=$(id -g "${ovs_user_id%:*}")
-      local groups=$(id -G "${ovs_user_id%:*}" | tr ' ' ',')
-
-      USER_ARGS="setpriv --reuid $uid --regid $gid --groups $groups $USER_ARGS"
-      chown -R ${ovs_user_id} /etc/openvswitch
-      chown -R ${ovs_user_id} /var/run/openvswitch
-      chown -R ${ovs_user_id} /var/log/openvswitch
-  fi
-
-  ${USER_ARGS} start_northd \
-    --no-monitor --ovn-manage-ovsdb=no \
-    --ovn-northd-nb-db=${ovn_nbdb_i} --ovn-northd-sb-db=${ovn_sbdb_i} \
-    --ovn-northd-log="${ovn_log_northd}" \
+  run_as_ovs_user_if_needed \
+      /usr/share/openvswitch/scripts/ovn-ctl start_northd \
+      --no-monitor --ovn-manage-ovsdb=no \
+      --ovn-northd-nb-db=${ovn_nbdb_i} --ovn-northd-sb-db=${ovn_sbdb_i} \
+      --ovn-northd-log="${ovn_log_northd}" \
     ${ovn_northd_opts}
 
   wait_for_event process_ready ovn-northd
@@ -674,22 +673,10 @@ ovn-northd () {
 
     echo "OVN_NORTH=${ovn_nbdb}  OVN_SOUTH=${ovn_sbdb} ovn_northd_opts=${ovn_northd_opts}"
 
-    USER_ARGS="/usr/share/openvswitch/scripts/ovn-ctl"
-
-    if [ ${ovs_user_id:-XX} != "XX" ]; then
-        local uid=$(id -u "${ovs_user_id%:*}")
-        local gid=$(id -g "${ovs_user_id%:*}")
-        local groups=$(id -G "${ovs_user_id%:*}" | tr ' ' ',')
-
-        USER_ARGS="setpriv --reuid $uid --regid $gid --groups $groups $USER_ARGS"
-        chown -R ${ovs_user_id} /etc/openvswitch
-        chown -R ${ovs_user_id} /var/run/openvswitch
-        chown -R ${ovs_user_id} /var/log/openvswitch
-    fi
-
-    ${USER_ARGS} start_northd \
-      --db-nb-addr=${ovn_nbdb} --db-sb-addr=${ovn_sbdb} \
-      ${ovn_northd_opts}
+    run_as_ovs_user_if_needed \
+        /usr/share/openvswitch/scripts/ovn-ctl start_northd \
+        --db-nb-addr=${ovn_nbdb} --db-sb-addr=${ovn_sbdb} \
+        ${ovn_northd_opts}
     echo "=============== ovn-northd ========== FAILED"
     cat /var/log/openvswitch/ovn-northd.log
     exit 4
@@ -762,20 +749,8 @@ ovn-controller () {
   rm -f /var/run/ovn-kubernetes/cni/*
   rm -f /var/run/openvswitch/ovn-controller.*.ctl
 
-  USER_ARGS="/usr/share/openvswitch/scripts/ovn-ctl"
-
-  if [ ${ovs_user_id:-XX} != "XX" ]; then
-      local uid=$(id -u "${ovs_user_id%:*}")
-      local gid=$(id -g "${ovs_user_id%:*}")
-      local groups=$(id -G "${ovs_user_id%:*}" | tr ' ' ',')
-
-      USER_ARGS="setpriv --reuid $uid --regid $gid --groups $groups $USER_ARGS"
-      chown -R ${ovs_user_id} /etc/openvswitch
-      chown -R ${ovs_user_id} /var/run/openvswitch
-      chown -R ${ovs_user_id} /var/log/openvswitch
-  fi
-
-  ${USER_ARGS} --no-monitor start_controller \
+  run_as_ovs_user_if_needed \
+      /usr/share/openvswitch/scripts/ovn-ctl ARGS} --no-monitor start_controller \
                --ovn-controller-log="${ovn_log_controller}" \
                ${ovn_controller_opts}
 
@@ -897,20 +872,10 @@ start_ovn () {
     echo "=============== start ovn-northd ========== MASTER ONLY"
     echo OVN_NORTH=${ovn_nbdb}  OVN_SOUTH=${ovn_sbdb} ovn_northd_opts=${ovn_northd_opts}
     rm -f /var/run/openvswitch/ovn-northd.*.ctl
-    USER_ARGS="/usr/share/openvswitch/scripts/ovn-ctl"
-
-    if [ ${ovs_user_id:-XX} != "XX" ]; then
-        local uid=$(id -u "${ovs_user_id%:*}")
-        local gid=$(id -g "${ovs_user_id%:*}")
-        local groups=$(id -G "${ovs_user_id%:*}" | tr ' ' ',')
-
-        USER_ARGS="setpriv --reuid $uid --regid $gid --groups $groups $USER_ARGS"
-        chown -R ${ovs_user_id} /etc/openvswitch
-        chown -R ${ovs_user_id} /var/run/openvswitch
-    fi
-    ${USER_ARGS} start_northd --no-monitor \
-               --db-nb-addr=${ovn_nbdb} --db-sb-addr=${ovn_sbdb} "$@" \
-               ${ovn_northd_opts}
+    run_as_ovs_user_if_needed \
+        /usr/share/openvswitch/scripts/ovn-ctl start_northd --no-monitor \
+        --db-nb-addr=${ovn_nbdb} --db-sb-addr=${ovn_sbdb} "$@" \
+        ${ovn_northd_opts}
 
     # ovn-master - master node only
     echo "=============== start ovn-master (wait for northbd) ========== MASTER ONLY"
