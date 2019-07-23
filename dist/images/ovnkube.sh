@@ -752,7 +752,7 @@ ovn-controller () {
   rm -f /var/run/openvswitch/ovn-controller.*.ctl
 
   run_as_ovs_user_if_needed \
-      /usr/share/openvswitch/scripts/ovn-ctl ARGS} --no-monitor start_controller \
+      /usr/share/openvswitch/scripts/ovn-ctl --no-monitor start_controller \
                --ovn-controller-log="${ovn_log_controller}" \
                ${ovn_controller_opts}
 
