@@ -152,9 +152,11 @@ run_as_ovs_user_if_needed () {
       local gid=$(id -g "${ovs_user_id%:*}")
       local groups=$(id -G "${ovs_user_id%:*}" | tr ' ' ',')
 
-      setpriv --reuid $uid --regid $gid --groups $groups $@
+      setpriv --reuid $uid --regid $gid --groups $groups "$@"
+      echo "run as: setpriv --reuid $uid --regid $gid --groups $groups $@"
   else
-      $@
+      "$@"
+      echo "run as: $@"
   fi
 }
 
